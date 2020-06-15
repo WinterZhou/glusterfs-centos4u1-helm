@@ -3,7 +3,7 @@ maybe the simplest helm chart of glusterfs-centos4u1 application, with no comple
 
 # Very easy to setup
 
-this application is the simplest way to deploy glusterfs container on kubernetes. It is based on gluster/gluster-kubernetes, but, there's heketi need!
+this application is the simplest way to deploy glusterfs container on kubernetes. It is based on gluster/gluster-kubernetes, but, there's no heketi need!
 
 it's very fun that:
 1. you don't need install gluster-fuse or client on your node

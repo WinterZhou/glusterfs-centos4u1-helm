@@ -1,0 +1,39 @@
+labels:
+  io.cattle.role: project # options are cluster/project
+  io.rancher.app_min_version: 0.1.0
+categories:
+- Microservice
+- glusterfs
+questions:
+- variable: image.registry
+  default: "opendata.sobeylingyun.com"
+  description: "镜像服务器地址"
+  type: enum
+  required: true
+  label: 镜像服务器地址
+  options:
+    - "opendata.sobeylingyun.com"
+    - "harbor.sobey.com"
+#- variable: cluster.hostAffinity
+#  group: "集群配置"
+#  default: true
+#  description: "默认开启，意味着每个主机只能启动一个POD"
+#  label: 是否开启主机反亲和
+#  type: enum
+#  options:
+#  - true
+#  - false
+- variable: cluster.nodes
+  group: "集群配置"
+  description: "集群的node的IP，所有节点都应该配置进来。集群节点一旦确定，后续将不会再修改"
+  label: 以“,”分割，设置集群node的ip
+  type: string
+  required: true
+- variable: fs.volumes
+  group: "卷配置"
+  description: |-
+    设置卷，多个以','分割。每一个名称就是复制卷卷名。
+    以sobeyvolume为例，容器内/glustervolumes/sobeyvolume；主机/glusterworkspace/glusterfs-0/volumes/sobeyvolume
+  type: string
+  label: 以“,”分割，设置1个或多个卷
+  required: true

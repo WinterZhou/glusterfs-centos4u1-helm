@@ -1,0 +1,53 @@
+# Default values for ficus-eureka.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+image:
+  registry: harbor.sobey.com
+  repository: ficus/gluster/gluster-centos
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+
+proactive: release
+
+shadowadminname: glustershadowadmin
+
+# 是否允许k8s集群外访问，如果是，则意味着要开很多NodePort端口 @see StatefulSet.xml
+cluster:
+  # 集群节点
+  nodes: 192.168.0.1,192.168.0.2
+  ports:
+  # @see https://docs.gluster.org/en/latest/Administrator%20Guide/Setting%20Up%20Clients/
+  # 主机端口从30807,30808代表
+  - 24007
+  - 24008
+  brickports:
+  # 根据描述，预留8个bricks端口
+  #（因为最终在Stateful中通过反亲和设置为按主机分布，
+  # 因此这里相当于最多8个主机，也就差球不多了）
+  # 主机端口从30852,30859代表
+  - 49152
+  - 49153
+  - 49154
+  - 49155
+  - 49156
+  - 49157
+  - 49158
+  - 49159
+
+# glusterfs的卷和对应的宿主机挂载路径
+fs:
+  # 主机上面映射的工作目录。写死/var/lib/kubelet/glusterworkspace
+  # 在容器化的k8s环境，针对hostpath用subPath或subPathExpr，mount的主机路径一定要用一个特别的路径
+  # 一定要用/var/lib/kubelet路径。 @see https://github.com/kubernetes/kubernetes/issues/61456#issuecomment-375648214 @see https://github.com/rancher/rancher/issues/14836
+  # 实际上每个工作目录最终是/var/lib/kubelet/glusterworkspace//glusterfs-{n}
+  workdir: /var/lib/kubelet/glusterworkspace
+  # 这些就是将要创建的卷，同时，也就在工作目录下创建对应名称的brick目录
+  volumes: sobeyvolume
+
+  
+updateStrategy: RollingUpdate

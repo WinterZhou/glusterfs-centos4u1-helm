@@ -1,0 +1,211 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: {{ template "glusterfs.fullname" . }}
+  name: {{ template "glusterfs.fullname" . }}
+data:
+{{ (.Files.Glob "configs/gluster/*.*").AsConfig | indent 2 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ template "glusterfs.fullname" . }}
+  labels:
+    app: {{ template "glusterfs.fullname" . }}
+spec:
+  replicas: {{ len (splitList "," .Values.cluster.nodes) }}
+  # 这个用来作为StatefulSet的pod实例服务域名，比如 glusterfs-0.glusterfs。让集群内可以固定识别
+  serviceName: {{ template "glusterfs.fullname" . }}
+  selector:
+    matchLabels:
+      app: {{ template "glusterfs.fullname" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "glusterfs.fullname" . }}
+    spec:
+      # 启用host网络，让主机能直接访问。意味着节点反亲和必须设置（实际上不设置，新的pod实例也会因为端口占用而pending）
+      hostNetwork: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: env-ficus
+                    operator: Exists
+                  - key: env-ficus
+                    operator: In
+                    values:
+                      - "true"
+#        {{- if .Values.cluster.hostAffinity }}
+#        {{- end }}
+        # 设置反亲和————“新的POD，必须不能与app:glusterfs在同一个Node，因此新的pod必须调度到另一个node”
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - {{ template "glusterfs.fullname" . }}
+            topologyKey: "kubernetes.io/hostname"
+      containers:
+        #这部分是通过docker方式在宿主机上运行之后得到的结论
+        #docker run -d --privileged=true
+        #--name gluster0 --hostname=gluster0
+        #-v /sobeyhive/data/glusterfs/node-0/etc:/etc/glusterfs:z --配置信息
+        #-v /sobeyhive/data/glusterfs/node-0/glusterd:/var/lib/glusterd:z --核心命令
+        #-v /sobeyhive/data/glusterfs/node-0/log:/var/log/glusterfs:z --日志
+        #-v /sobeyhive/data/glusterfs/node-0/data:/glusterdata:z --brick数据位置
+        #-v /sys/fs/cgroup:/sys/fs/cgroup:ro  --最好是把cgroup加上
+        #-v /dev:/dev  --可选，最好计上
+        #opendata.sobeylingyun.com/ficus/gluster/gluster-centos
+        - name: {{ template "glusterfs.fullname" . }}
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            limits:
+              memory: 500Mi
+            requests:
+              memory: 200Mi
+          ports:
+          - name: serverport
+            containerPort: 24007
+            protocol: TCP
+          - name: serverupdport
+            containerPort: 24008
+            protocol: UDP
+          - name: sshd
+            containerPort: 2222
+            protocol: TCP
+          # 获取cluster.brickports，循环映射
+          {{- range .Values.cluster.brickports}}
+          - name: port-{{ . }}
+            containerPort: {{ . }}
+            protocol: TCP
+          {{- end}}
+          securityContext:
+            privileged: true
+          command:
+            - sh 
+            - -c
+            - "cp /init_sh/* /tmp/ && chmod +x /tmp/*.sh && /tmp/init.sh"
+          env:
+            - name: USER_LANGUAGE
+              value: zh
+            - name: USER_REGION
+              value: CN
+            - name: USER_TIMEZONE
+              value: Asia/Shanghai
+            # 用于在启动的时候，脚本中判断数量使用
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: POD_COUNT
+              value: "{{ len (splitList "," .Values.cluster.nodes) }}"
+            - name: POD_NODENAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: spec.nodeName
+            # 对应spec.serviceName
+            - name: POD_SERVICE_NAME
+              value: {{ template "glusterfs.fullname" . }}
+            - name: POD_HOSTIP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.hostIP
+            - name: POD_PODIP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            # 这是给shadowadmin用来执行脚本add peer和创建卷用的
+            - name: GLUSTERFS_NODES
+              value: {{ .Values.cluster.nodes }}
+            - name: GLUSTERFS_0
+              value: {{ template "glusterfs.fullname" . }}-0
+            - name: HEADLESS_GLUSTERFS_0
+              value: {{ template "glusterfs.fullname" . }}-0.{{ template "glusterfs.fullname" . }}
+            - name: FS_VOLUMES
+              value: {{ .Values.fs.volumes }}
+            - name: SHADOWADMIN_NAME
+              value: {{ .Values.shadowadminname }}
+          readinessProbe:
+            timeoutSeconds: 30
+            initialDelaySeconds: 40
+            tcpSocket:
+              port: 24007
+            periodSeconds: 25
+            successThreshold: 1
+            failureThreshold: 15
+          livenessProbe:
+            timeoutSeconds: 30
+            initialDelaySeconds: 40
+            tcpSocket:
+              port: 24007
+            periodSeconds: 25
+            successThreshold: 1
+            failureThreshold: 15
+          volumeMounts:
+            # 用来挂载configmap中写入的sh。 @see templates/configmap.yaml
+            - mountPath: /init_sh
+            # configmap.yaml中的ConfigMap是以glusterfs.fullname命名
+              name: {{ template "glusterfs.fullname" . }}
+            #-v /sobeyhive/data/glusterfs/node-0/etc:/etc/glusterfs:z --配置信息
+            #-v /sobeyhive/data/glusterfs/node-0/glusterd:/var/lib/glusterd:z --核心命令
+            #-v /sobeyhive/data/glusterfs/node-0/log:/var/log/glusterfs:z --日志
+            #-v /sobeyhive/data/glusterfs/node-0/data:/glusterdata:z --brick数据位置
+            #-v /sys/fs/cgroup:/sys/fs/cgroup:ro  --最好是把cgroup加上
+            #-v /dev:/dev  --可选，最好计上
+            - mountPath: /etc/glusterfs
+              name: gluster-workspace
+              # @see https://misa.gitbook.io/k8s-ocp-yaml/kubernetes-docs/2020-04-23-volume-subpathexpr
+              # 在容器化的k8s环境，针对hostpath用subPath或subPathExpr，mount的主机路径一定要用一个特别的路径
+              # 一定要用/var/lib/kubelet路径。 @see https://github.com/kubernetes/kubernetes/issues/61456#issuecomment-375648214 @see https://github.com/rancher/rancher/issues/14836
+              subPathExpr: $(POD_NAME)/etc
+            - mountPath: /var/lib/glusterd
+              name: gluster-workspace
+              subPathExpr: $(POD_NAME)/glusterd
+            - mountPath: /var/log/glusterfs
+              name: gluster-workspace
+              subPathExpr: $(POD_NAME)/log
+            - mountPath: /glustervolumes
+              name: gluster-workspace
+              subPathExpr: $(POD_NAME)/volumes
+            - mountPath: /sys/fs/cgroup/
+              name: sys-fs-cgroup
+              readOnly: true
+            - mountPath: /dev
+              name: dev
+      volumes:
+        - name: {{ template "glusterfs.fullname" . }}
+          configMap:
+            defaultMode: 256
+            name: {{ template "glusterfs.fullname" . }}
+            optional: false
+        - name: gluster-workspace
+          hostPath:
+            path: {{ .Values.fs.workdir }}
+            type: DirectoryOrCreate
+        - name: sys-fs-cgroup
+          hostPath:
+            path: /sys/fs/cgroup/
+        - name: dev
+          hostPath:
+            path: /dev
+#        - name: glusterfs-lvm
+#          hostPath:
+#            path: /run/lvm
+#        - name: glusterfs-run
+#          hostPath:
+#            path: /run

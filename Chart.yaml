@@ -1,0 +1,35 @@
+apiVersion: v1
+name: glusterfs
+description: |-
+  glusterfs容器化集群。目前只实现了新增。如果降POD数量，暂时不能处理。
+  主机上面的映射目录固定为/glusterworkspace。
+  每一个POD是stateful方式创建工作目录，也就是/glusterworkspace/glusterfs-n
+  数据卷参数决定了创建多少个复制卷，每一个复制卷就是挂载卷名称。
+  比如/glusterworkspace/glusterfs-0/volumes/sobeyvolume
+  对应容器内目录为/glustervolumes/sobeyvolume
+  挂载glusterfs的入口地址为glusterfs-0.glusterfs[.{namespace}]
+
+# A chart can be either an 'application' or a 'library' chart.
+#
+# Application charts are a collection of templates that can be packaged into versioned archives
+# to be deployed.
+#
+# Library charts provide useful utilities or functions for the chart developer. They're included as
+# a dependency of application charts to inject those utilities and functions into the rendering
+# pipeline. Library charts do not define any templates and therefore cannot be deployed.
+type: application
+
+# This is the chart version. This version number should be incremented each time you make changes
+# to the chart and its templates, including the app version.
+version: 1.0.02020061212
+
+# This is the version number of the application being deployed. This version number should be
+# incremented each time you make changes to the application.
+appVersion: gluster4u1_centos7
+
+keywords:
+  - glusterfs
+
+maintainers:
+  - email: wangxi@sobey.com
+    name: wangxi

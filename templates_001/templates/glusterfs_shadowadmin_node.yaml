@@ -170,19 +170,10 @@ spec:
             # 这是给shadowadmin用来执行脚本add peer和创建卷用的
             - name: GLUSTERFS_0
               value: {{ template "glusterfs.fullname" . }}-0
-            - name: HEADLESS_GLUSTERFS_0
+            - name: HOST_GLUSTERFS_0
               value: {{ template "glusterfs.fullname" . }}-0.{{ template "glusterfs.fullname" . }}
             - name: FS_VOLUMES
               value: {{ .Values.fs.volumes }}
-            # S3服务相关
-            - name: S3_ENABLE
-              value: "{{ .Values.s3.enable }}"
-            - name: S3_ACCOUNT
-              value: {{ .Values.s3.account }}
-            - name: S3_USER
-              value: {{ .Values.s3.user }}
-            - name: S3_PWD
-              value: {{ .Values.s3.password }}
           readinessProbe:
             timeoutSeconds: 30
             initialDelaySeconds: 40

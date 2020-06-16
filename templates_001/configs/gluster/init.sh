@@ -1,23 +1,11 @@
 #!/bin/sh
 
-# 设置IFS为空，便于打印命令的时候换行
-# @see https://unix.stackexchange.com/questions/164508/why-do-newline-characters-get-lost-when-using-command-substitution
-IFS=
-
 # glusterfs的0号有状态节点
 # 0号是一个主控节点，它负责新节点的add peer等工作
 # 它在启动后，同POD内的另一个容器shadowadmin-0会感知到(@see ShadowStatefulSet.yaml)
 # shadowadmin-0会做一些初始化操作，然后把控制权交给glusterfs-0
 
 echo "当前POD：$POD_NAME "
-
-# 限制启动数量
-podnumber=${POD_NAME:0-1}
-replicacount=${POD_COUNT}
-if [[ "`expr $podnumber + 1`" -gt "$replicacount" ]]; then
-   echo "当前POD超出主备数量设置：$replicacount, 不能启动"
-   exit 1
-fi
 
 
 mkdir -p /glustervolumes
@@ -72,7 +60,7 @@ if [[ "${podnumber}" -eq 0 ]]; then
         rslt=$(gluster peer status)
         echo ${rslt}
         rlst=$(gluster peer status|grep Peers|awk '{print $4}')
-        if [[ "$rlst" -gt 0  ]]; then
+        if [[ "$content" -ge 0  ]]; then
             echo "shadowadmin已经初始化，并且将glusterfs-0加入集群"
             break
         fi
@@ -90,28 +78,16 @@ echo "挂载系统卷...."
 #------ 每一个节点，都通过0号节点挂载内部系统卷，并且写入一个标志文件。内部系统卷在shadowadmin中创建
 mkdir -p /vol_system
 RETRY_TIMES=0
-OK="false"
 while [[ ${RETRY_TIMES} -lt 60 ]]; do
-    array=(${GLUSTERFS_NODES//,/ })
-    for var in ${array[@]}
-    do
-        echo "mount -t glusterfs ${var}:vol_system /vol_system"
-        rslt=$(mount -t glusterfs ${var}:vol_system /vol_system 2>&1)
-        echo "挂载系统卷结果: ${rslt}"
-        rslt=$(echo ${rslt} |grep "failed\|ERROR:"|wc -c)
-        echo ${rslt}
-        if [[ ${rslt} -gt 0 ]]; then
-            echo "重试挂载系统卷 .........."
-        else
-            echo ${rslt}
-            OK="true"
-            break
-        fi
-    done
-    if [[ ${OK} == "true" ]]; then
-        break
+    rslt=$(mount -t glusterfs ${HOST_GLUSTERFS_0}:vol_system /vol_system 2>&1)
+    echo ${rslt}
+    rslt=$(echo ${rslt} |grep "failed\|ERROR:"|wc -c)
+    echo ${rslt}
+    if [[ ${rslt} -gt 0 ]]; then
+        echo "重试挂载系统卷 .........." && sleep ${WAIT}
     else
-        sleep ${WAIT}
+        echo ${rslt}
+        break
     fi
 done
 if [[ "$RETRY_TIMES" -ge 60 ]]; then
@@ -119,8 +95,8 @@ if [[ "$RETRY_TIMES" -ge 60 ]]; then
     exit 0
 fi
 # 向系统卷写入一个标识文件
-if [[ ! -f "/vol_system/${POD_HOSTIP}" ]]; then
-    echo "hello gluster" > /vol_system/${POD_HOSTIP}
+if [[ ! -f "/vol_system/${POD_NAME}" ]]; then
+    echo "hello gluster" > /vol_system/${POD_NAME}
 fi
 echo "挂载系统卷完成"
 
@@ -128,28 +104,23 @@ echo "挂载系统卷完成"
 #------ 主进程不退出，对于0号节点，开始通过系统卷的内容进行节点增 TODO:删
 while true
 do
-    content=$(gluster pool list)
+    content=$(gluster peer status)
     echo "######peer status######"
     echo ${content}
-    content=$(gluster volume info)
-    echo "######volume info######"
+    content=$(gluster volume list)
+    echo "######volume list######"
     echo ${content}
-    if [[ ${S3_ENABLE} == "true" ]]; then
-        echo "######s3 info######"
-        echo -e "S3_ACCOUNT: ${S3_ACCOUNT}\nS3_USER: ${S3_USER}\nS3_PWD: ${S3_PWD}"
-    fi
 
 
     if [[ "${podnumber}" -eq 0 ]]; then
         echo "检查节点...."
-        boot_node_ip=$(cat /vol_system/boot_node)
         for file in /vol_system/*; do
             info=$(cat ${file})
-            # 如果不是初创节点的shadowadmin写入的文件，同时也不是初创node的ip，则加入集群
-            if [[ $(basename ${file}) != "boot_node" ]] && [[ $(basename ${file}) != ${boot_node_ip} ]] && [[ ${info} == "hello gluster" ]]; then
+            if [[ ${info} == "hello gluster" ]] && [[ $(basename ${file}) != ${GLUSTERFS_0} ]]; then
+                # 如果节点是初创节点，并且不是node-0，则加入集群。
                 echo "将 $(basename ${file}) 加入集群..."
                 # 把节点加入集群
-                rslt=$(gluster peer probe $(basename ${file}))
+                rslt=$(gluster peer probe $(basename ${file}).${POD_SERVICE_NAME})
                 echo ${rslt}
                 # 获取当前的replica数量，循环创建启动配置中设置的卷
                 # 由于我们是全节点加入brick，因此peer数量就是brick数量
@@ -159,21 +130,14 @@ do
                 # 根据配置，循环执行add-brick
                 for var in ${array[@]}
                 do
-                    rslt=$(gluster volume add-brick ${var} replica ${replica_cnt} $(basename ${file}):/glustervolumes/${var} force)  #$(basename ${file})就是node的ip地址
+                    rslt=$(gluster volume add-brick ${var} replica ${replica_cnt} $(basename ${file}).${POD_SERVICE_NAME}:/glustervolumes/${var} force)
                     echo ${rslt}
                 done
-
-                # 如果设置了S3，创建S3的卷
-                if [[ ${S3_ENABLE} == "true" ]]; then
-                    rslt=$(gluster volume add-brick ${S3_ACCOUNT} replica ${replica_cnt} $(basename ${file}):/glustervolumes/${S3_ACCOUNT} force)
-                    echo ${rslt}
-                fi
-
                 # 修改文件内容，下次就不会再处理这个文件对应的节点
                 echo "welcome you peer" > ${file}
             fi
 
-            if [[ ${info} == "hello gluster" ]] && [[ $(basename ${file}) == ${boot_node_ip} ]]; then
+            if [[ ${info} == "hello gluster" ]] && [[ $(basename ${file}) == ${GLUSTERFS_0} ]]; then
                 echo "welcome you peer" > ${file}
             fi
         done

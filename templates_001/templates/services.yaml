@@ -1,0 +1,112 @@
+# 这是用于集群内固定访问特定pod的headless服务。比如glusterfs-0.glusterfs
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "glusterfs.fullname" . }}
+  labels:
+    {{- template "glusterfs.labels" . }}
+spec:
+  publishNotReadyAddresses: true
+  clusterIP: None
+  ports:
+    # 在K8S内部做集群同步
+    # 获取cluster.brickports，循环映射
+    {{- range .Values.cluster.brickports}}
+    - port: {{ . }}
+      targetPort: {{ . }}
+      protocol: TCP
+      name: port-{{ . }}
+    {{- end }}
+    - port: 2222
+      targetPort: 2222
+      protocol: TCP
+      name: sshd
+    - port: 24007
+      targetPort: 24007
+      protocol: TCP
+      name: serverport
+    - port: 24008
+      targetPort: 24008
+      protocol: UDP
+      name: serverupdport
+  selector:
+    app: {{ template "glusterfs.fullname" . }}
+---
+# 这部分是ClusterIP，用于构建集群内的glusterfs服务统一访问入口
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "glusterfs.fullname" . }}-clusterip
+  labels:
+    {{- template "glusterfs.labels" . }}
+spec:
+  # he range of valid IPs is 10.43.0.0/16
+  clusterIP: 10.43.0.100
+  ports:
+    # 在K8S内部做集群同步
+    # 获取cluster.brickports，循环映射
+    {{- range .Values.cluster.brickports}}
+    - port: {{ . }}
+      targetPort: {{ . }}
+      protocol: TCP
+      name: port-{{ . }}
+    {{- end }}
+    - port: 2222
+      targetPort: 2222
+      protocol: TCP
+      name: sshd
+    - port: 24007
+      targetPort: 24007
+      protocol: TCP
+      name: serverport
+    - port: 24008
+      targetPort: 24008
+      protocol: UDP
+      name: serverupdport
+  selector:
+    app: {{ template "glusterfs.fullname" . }}
+#---
+# nodeport的原因是，glusterfs的PV只能对接Endpoints。因此要把节点开放出来，最终又用Endpoints引入
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: {{ template "glusterfs.fullname" . }}-nodeport
+#  labels:
+#    {{- template "glusterfs.labels" . }}
+#spec:
+#  type: NodePort
+#  ports:
+#  - port: 2222
+#    targetPort: 2222
+#    protocol: TCP
+#    name: sshd
+#  - port: 24007
+#    targetPort: 24007
+#    protocol: TCP
+#    name: serverport
+#    nodePort: 24007
+#  - port: 24008
+#    targetPort: 24008
+#    protocol: UDP
+#    name: serverupdport
+#    nodePort: 24008
+#  selector:
+#    app: {{ template "glusterfs.fullname" . }}
+#---
+#apiVersion: v1
+#kind: Endpoints
+#metadata:
+#  name: glusterfs-service-ep
+#subsets:
+#- addresses:
+#  - ip: 172.16.148.168
+#  ports:
+#  - port: 1990
+#---
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: glusterfs-service-ep
+#spec:
+#  ports:
+#  - port: 1990

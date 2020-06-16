@@ -140,6 +140,15 @@ spec:
               value: {{ .Values.fs.volumes }}
             - name: SHADOWADMIN_NAME
               value: {{ .Values.shadowadminname }}
+            # S3服务相关
+            - name: S3_ENABLE
+              value: "{{ .Values.s3.enable }}"
+            - name: S3_ACCOUNT
+              value: {{ .Values.s3.account }}
+            - name: S3_USER
+              value: {{ .Values.s3.user }}
+            - name: S3_PWD
+              value: {{ .Values.s3.password }}
           readinessProbe:
             timeoutSeconds: 30
             initialDelaySeconds: 40
@@ -209,3 +218,133 @@ spec:
 #        - name: glusterfs-run
 #          hostPath:
 #            path: /run
+#  S3 服务的相关POD
+#  based on https://github.com/gluster/gluster-kubernetes/blob/master/deploy/kube-templates/gluster-s3-template.yaml
+{{- if .Values.s3.enable }}
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: glusterfs-s3
+  labels:
+    glusterfs: s3-service
+    gluster-s3: service
+spec:
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  selector:
+    glusterfs: glusterfs-s3-pod
+  type: ClusterIP
+  sessionAffinity: None
+status:
+  loadBalancer: {}
+  {{- if .Values.s3.enablenodeport }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glusterfs-s3-nodeport
+  labels:
+    glusterfs: s3-service-nodeport
+spec:
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+    name: s3-server-nodeport
+    nodePort: {{ .Values.s3.nodeport }}
+  selector:
+    glusterfs: glusterfs-s3-pod
+  {{- end }}
+---
+#  pv and pvc
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: glusterfs-s3-pv
+spec:
+  capacity:
+    storage: "{{ .Values.s3.capacity }}Gi"
+  accessModes:
+    - ReadWriteMany
+  glusterfs:
+    endpoints: glusterfs-service-ep # see services.yaml
+    path: {{ .Values.s3.account }}
+    readOnly: false
+  persistentVolumeReclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gluster-s3-pvc
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+     requests:
+       storage: "{{ .Values.s3.capacity }}Gi"
+  volumeName: "glusterfs-s3-pv"
+---
+#  S3-object container
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: gluster-s3-deployment
+  labels:
+    glusterfs: glusterfs-s3-pod
+    gluster-s3: deployment
+  annotations:
+    description: Defines how to deploy gluster s3 object storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+       glusterfs: glusterfs-s3-pod
+  template:
+    metadata:
+      name: glusterfs-s3-pod
+      labels:
+        glusterfs: glusterfs-s3-pod
+    spec:
+      containers:
+      - name: gluster-s3
+        image: "{{ .Values.image.registry }}/{{ .Values.image.repositorys3 }}:latest"
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: gluster
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: S3_ACCOUNT
+          value: "{{ .Values.s3.account }}"
+        - name: S3_USER
+          value: "{{ .Values.s3.user }}"
+        - name: S3_PASSWORD
+          value: "{{ .Values.s3.password }}"
+        resources: {}
+        volumeMounts:
+        - name: gluster-vol1
+          mountPath: "/mnt/gluster-object/{{ .Values.s3.account }}"
+        - name: glusterfs-cgroup
+          readOnly: true
+          mountPath: "/sys/fs/cgroup"
+        terminationMessagePath: "/dev/termination-log"
+        securityContext:
+          privileged: true
+      volumes:
+      - name: glusterfs-cgroup
+        hostPath:
+          path: "/sys/fs/cgroup"
+      - name: gluster-vol1
+        persistentVolumeClaim:
+          claimName: gluster-s3-pvc
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: default
+      serviceAccount: default
+      securityContext: {}
+{{- end }}

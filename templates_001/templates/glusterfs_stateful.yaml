@@ -1,69 +1,29 @@
-# 创世节点，用于和glusterfs-0构建一个双节点结群，然后就退出
-# 该节点存在且仅存在于node-0上
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ .Values.shadowadminname }}
-  labels:
-    {{- template "glusterfs.labels" . }}
-spec:
-  publishNotReadyAddresses: true
-  clusterIP: None
-  ports:
-    # 获取cluster.brickports，循环映射
-    {{- range .Values.cluster.brickports}}
-    - port: {{ . }}
-      targetPort: {{ . }}
-      protocol: TCP
-      name: port-{{ . }}
-    {{- end }}
-    - port: 2222
-      targetPort: 2222
-      protocol: TCP
-      name: sshd
-    - port: 24007
-      targetPort: 24007
-      protocol: TCP
-      name: serverport
-    - port: 24008
-      targetPort: 24008
-      protocol: UDP
-      name: serverupdport
-  selector:
-    app: {{ .Values.shadowadminname }}
----
 apiVersion: v1
 kind: ConfigMap
 metadata:
   labels:
-    app: {{ .Values.shadowadminname }}
-  name: {{ .Values.shadowadminname }}
+    app: {{ template "glusterfs.fullname" . }}
+  name: {{ template "glusterfs.fullname" . }}
 data:
-{{ (.Files.Glob "configs/shadowadmin/*.*").AsConfig | indent 2 }}
+{{ (.Files.Glob "configs/gluster/*.*").AsConfig | indent 2 }}
 ---
-# 这是一个名叫Shadowadmin的pod
-# 作用：由于glusterfs的replica卷，要求至少有两个peer才能创建
-# 因此，这个pod作为一个shadowadmin，在且仅在podindex为1的时候启动
-# 目的是让gluster-0能够add peer，组建replica卷
-# 当gluster-0启动后，它的脚本会执行add peer等操作
-# 完成后，进入空转状态，控制权交给gluster-0
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ .Values.shadowadminname }}
+  name: {{ template "glusterfs.fullname" . }}
   labels:
-    app: {{ .Values.shadowadminname }}
+    app: {{ template "glusterfs.fullname" . }}
 spec:
   replicas: 1
-  # 这个用来作为StatefulSet的pod实例服务域名，比如 glusterfs-0.glusterfs
-  serviceName: {{ .Values.shadowadminname }}
+  # 这个用来作为StatefulSet的pod实例服务域名，比如 glusterfs-0.glusterfs。让集群内可以固定识别
+  serviceName: {{ template "glusterfs.fullname" . }}
   selector:
     matchLabels:
-      app: {{ .Values.shadowadminname }}
+      app: {{ template "glusterfs.fullname" . }}
   template:
     metadata:
       labels:
-        app: {{ .Values.shadowadminname }}
+        app: {{ template "glusterfs.fullname" . }}
     spec:
       affinity:
         nodeAffinity:
@@ -76,6 +36,8 @@ spec:
                     operator: In
                     values:
                       - "true"
+        {{- if .Values.cluster.hostAffinity }}
+        # 设置反亲和————“新的POD，必须不能与app:glusterfs在同一个Node，因此新的pod必须调度到另一个node”
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
           - labelSelector:
@@ -83,8 +45,9 @@ spec:
               - key: app
                 operator: In
                 values:
-                - {{ .Values.shadowadminname }}
+                - {{ template "glusterfs.fullname" . }}
             topologyKey: "kubernetes.io/hostname"
+        {{- end }}
       containers:
         #这部分是通过docker方式在宿主机上运行之后得到的结论
         #docker run -d --privileged=true
@@ -96,12 +59,12 @@ spec:
         #-v /sys/fs/cgroup:/sys/fs/cgroup:ro  --最好是把cgroup加上
         #-v /dev:/dev  --可选，最好计上
         #opendata.sobeylingyun.com/ficus/gluster/gluster-centos
-        - name: {{ .Values.shadowadminname }}
+        - name: {{ template "glusterfs.fullname" . }}
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           resources:
             limits:
-              memory: 400Mi
+              memory: 500Mi
             requests:
               memory: 200Mi
           ports:
@@ -123,15 +86,10 @@ spec:
           securityContext:
             privileged: true
           command:
-            - sh
+            - sh 
             - -c
-            #  执行初始化脚本，init_sh为valumemounts挂载的configmap，判断是否还能启动更多的pod
-            #  最后执行启动命令
             - "cp /init_sh/* /tmp/ && chmod +x /tmp/*.sh && /tmp/init.sh"
           env:
-            # @see https://github.com/gluster/gluster-kubernetes/issues/298
-            - name: SYSTEMD_IGNORE_CHROOT
-              value: "1"
             - name: USER_LANGUAGE
               value: zh
             - name: USER_REGION
@@ -151,7 +109,7 @@ spec:
                   fieldPath: spec.nodeName
             # 对应spec.serviceName
             - name: POD_SERVICE_NAME
-              value:  {{ .Values.shadowadminname }}
+              value: {{ template "glusterfs.fullname" . }}
             - name: POD_HOSTIP
               valueFrom:
                 fieldRef:
@@ -170,19 +128,12 @@ spec:
             # 这是给shadowadmin用来执行脚本add peer和创建卷用的
             - name: GLUSTERFS_0
               value: {{ template "glusterfs.fullname" . }}-0
-            - name: HEADLESS_GLUSTERFS_0
+            - name: HOST_GLUSTERFS_0
               value: {{ template "glusterfs.fullname" . }}-0.{{ template "glusterfs.fullname" . }}
             - name: FS_VOLUMES
               value: {{ .Values.fs.volumes }}
-            # S3服务相关
-            - name: S3_ENABLE
-              value: "{{ .Values.s3.enable }}"
-            - name: S3_ACCOUNT
-              value: {{ .Values.s3.account }}
-            - name: S3_USER
-              value: {{ .Values.s3.user }}
-            - name: S3_PWD
-              value: {{ .Values.s3.password }}
+            - name: SHADOWADMIN_NAME
+              value: {{ .Values.shadowadminname }}
           readinessProbe:
             timeoutSeconds: 30
             initialDelaySeconds: 40
@@ -200,9 +151,10 @@ spec:
             successThreshold: 1
             failureThreshold: 15
           volumeMounts:
-            # 用来挂载configmap中写入的sh
+            # 用来挂载configmap中写入的sh。 @see templates/configmap.yaml
             - mountPath: /init_sh
-              name: {{ .Values.shadowadminname }}
+            # configmap.yaml中的ConfigMap是以glusterfs.fullname命名
+              name: {{ template "glusterfs.fullname" . }}
             #-v /sobeyhive/data/glusterfs/node-0/etc:/etc/glusterfs:z --配置信息
             #-v /sobeyhive/data/glusterfs/node-0/glusterd:/var/lib/glusterd:z --核心命令
             #-v /sobeyhive/data/glusterfs/node-0/log:/var/log/glusterfs:z --日志
@@ -224,16 +176,16 @@ spec:
             - mountPath: /glustervolumes
               name: gluster-workspace
               subPathExpr: $(POD_NAME)/volumes
-            - mountPath: /sys/fs/cgroup
+            - mountPath: /sys/fs/cgroup/
               name: sys-fs-cgroup
               readOnly: true
             - mountPath: /dev
               name: dev
       volumes:
-        - name: {{ .Values.shadowadminname }}
+        - name: {{ template "glusterfs.fullname" . }}
           configMap:
             defaultMode: 256
-            name: {{ .Values.shadowadminname }}
+            name: {{ template "glusterfs.fullname" . }}
             optional: false
         - name: gluster-workspace
           hostPath:
@@ -241,13 +193,13 @@ spec:
             type: DirectoryOrCreate
         - name: sys-fs-cgroup
           hostPath:
-            path: /sys/fs/cgroup
+            path: /sys/fs/cgroup/
         - name: dev
           hostPath:
             path: /dev
 #        - name: glusterfs-lvm
 #          hostPath:
-#            path: "/run/lvm"
+#            path: /run/lvm
 #        - name: glusterfs-run
 #          hostPath:
-#            path: "/run"
+#            path: /run

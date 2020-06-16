@@ -5,6 +5,7 @@
 image:
   registry: harbor.sobey.com
   repository: ficus/gluster/gluster-centos
+  repositorys3: ficus/gluster/gluster-s3
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -38,6 +39,16 @@ cluster:
   - 49157
   - 49158
   - 49159
+
+# S3服务相关
+s3:
+  enable: false
+  capacity: 5
+  account: "glusters3volume"
+  user: "sobeyficus"
+  password: "sobeyficus2020"
+  enablenodeport: false
+  nodeport: 30880
 
 # glusterfs的卷和对应的宿主机挂载路径
 fs:

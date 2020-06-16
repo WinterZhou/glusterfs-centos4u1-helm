@@ -1,8 +1,5 @@
 #!/bin/sh
 
-# 设置IFS为空，便于打印命令的时候换行
-# @see https://unix.stackexchange.com/questions/164508/why-do-newline-characters-get-lost-when-using-command-substitution
-IFS=
 
 # 这是一个名叫Shadowadmin的pod
 # 作用：由于glusterfs的replica卷，要求至少有两个peer才能创建
@@ -33,11 +30,11 @@ else
 
     while [[ ${RETRY_TIMES} -lt 60 ]]; do
         ((RETRY_TIMES++))
-        echo -n "Check ${HEADLESS_GLUSTERFS_0} $RETRY_TIMES times"
+        echo -n "Check ${HOST_GLUSTERFS_0} $RETRY_TIMES times"
         echo ".............................." && sleep ${WAIT}
 
         #
-        content=$(ping  ${HEADLESS_GLUSTERFS_0} -c 2 -n)
+        content=$(ping  ${HOST_GLUSTERFS_0} -c 2 -n)
         echo ${content}
         # 获取字符串长度
         len=${#content}
@@ -50,7 +47,7 @@ else
             break
         fi
 
-        echo "重试: ping  ${HEADLESS_GLUSTERFS_0} -c 2 -n"
+        echo "重试: ping  ${HOST_GLUSTERFS_0} -c 2 -n"
     done
 
     if [[ "$RETRY_TIMES" -ge 60 ]]; then
@@ -89,8 +86,7 @@ else
         echo -n "把glusterfs-0加入集群 $RETRY_TIMES times"
         echo ".............................." && sleep ${WAIT}
 
-        # 因为是hostnetwork模式，这里直接加入的其实是当前node，也就是gluster-0
-        content=$(gluster peer probe ${POD_HOSTIP})
+        content=$(gluster peer probe ${HOST_GLUSTERFS_0})
         echo ${content}
         idx=$(echo ${content}| grep "peer probe: success."|wc -c)
         if [[ ${idx} -gt 0 ]]; then
@@ -110,54 +106,21 @@ else
     # 开始创建需要的卷
 
     # 创建一个内部的system卷，用来节点间业务沟通
-    #                                                                                      这里也是用的当前node的ip作为一个peer，因为是hostnetwork模式（见89行）
-    echo "创建一个内部的system卷，用来节点间业务沟通"
-    echo "gluster volume create vol_system replica 2 ${POD_PODIP}:/glustervolumes/__vol_system__ ${POD_HOSTIP}:/glustervolumes/__vol_system__ force"
-    rslt=$(gluster volume create vol_system replica 2 ${POD_PODIP}:/glustervolumes/__vol_system__ ${POD_HOSTIP}:/glustervolumes/__vol_system__ force)
+    rslt=$(gluster volume create vol_system replica 2 ${POD_NAME}.${POD_SERVICE_NAME}:/glustervolumes/__vol_system__ ${HOST_GLUSTERFS_0}:/glustervolumes/__vol_system__ force)
     echo ${rslt}
-    echo "gluster volume start vol_system"
     rslt=$(gluster volume start vol_system)
     echo ${rslt}
     # replica卷已经建好了，此时可以将自己这份brick移除
-    rslt=$(echo "y"|gluster volume remove-brick vol_system replica 1 ${POD_PODIP}:/glustervolumes/__vol_system__ force)
+    rslt=$(echo "y"|gluster volume remove-brick vol_system replica 1 ${POD_NAME}.${POD_SERVICE_NAME}:/glustervolumes/__vol_system__ force)
     echo ${rslt}
-
-    echo "挂载系统卷...."
-    #------ 挂载内部系统卷，并且写入一个标志文件。由于这里是shadowadmin，因此，这里写入的hostip也就是整个集群的初创node
-    mkdir -p /vol_system
-    RETRY_TIMES=0
-    while [[ ${RETRY_TIMES} -lt 60 ]]; do
-        echo "mount -t glusterfs ${POD_HOSTIP}:vol_system /vol_system"
-        rslt=$(mount -t glusterfs ${POD_HOSTIP}:vol_system /vol_system 2>&1)
-        echo "挂载系统卷结果：${rslt}"
-        rslt=$(echo ${rslt} |grep "failed\|ERROR:"|wc -c)
-        echo ${rslt}
-        if [[ ${rslt} -gt 0 ]]; then
-            echo "重试挂载系统卷 .........." && sleep ${WAIT}
-        else
-            echo ${rslt}
-            break
-        fi
-    done
-    if [[ "$RETRY_TIMES" -ge 60 ]]; then
-        echo "挂载系统卷vol_system失败"
-        exit 0
-    fi
-    # 向系统卷写入一个标识文件
-    echo "${POD_HOSTIP}" > /vol_system/boot_node
-    echo "挂载系统卷完成"
-
 
     # 循环创建启动配置中设置的卷
     array=(${FS_VOLUMES//,/ })
     for var in ${array[@]}
     do
         mkdir -p /glustervolumes/${var}
-        #                                                                              这里也是用的当前node的ip作为一个peer，因为是hostnetwork模式（见89行）
-        echo "创建${var}卷. gluster volume create ${var} replica 2 ${POD_PODIP}:/glustervolumes/${var} ${POD_HOSTIP}:/glustervolumes/${var} force"
-        rslt=$(gluster volume create ${var} replica 2 ${POD_PODIP}:/glustervolumes/${var} ${POD_HOSTIP}:/glustervolumes/${var} force)
+        rslt=$(gluster volume create ${var} replica 2 ${POD_NAME}.${POD_SERVICE_NAME}:/glustervolumes/${var} ${HOST_GLUSTERFS_0}:/glustervolumes/${var} force)
         echo ${rslt}
-        echo "启动${var}卷. gluster volume start ${var}"
         rslt=$(gluster volume start ${var})
         echo ${rslt}
     done
@@ -165,22 +128,10 @@ else
     # 只是作为peer在集群中存在。当然，因为是peer，所以可以执行各种命令
     for var in ${array[@]}
     do
-        rslt=$(echo "y"|gluster volume remove-brick ${var} replica 1 ${POD_PODIP}:/glustervolumes/${var} force)
+        rslt=$(echo "y"|gluster volume remove-brick ${var} replica 1 ${POD_NAME}.${POD_SERVICE_NAME}:/glustervolumes/${var} force)
         echo ${rslt}
     done
 
-    # 如果设置了S3，创建S3的卷
-    if [[ ${S3_ENABLE} == "true" ]]; then
-        mkdir -p /glustervolumes/${S3_ACCOUNT}
-        echo "创建S3服务卷${S3_ACCOUNT}. gluster volume create ${S3_ACCOUNT} replica 2 ${POD_PODIP}:/glustervolumes/${var} ${POD_HOSTIP}:/glustervolumes/${S3_ACCOUNT} force"
-        rslt=$(gluster volume create ${S3_ACCOUNT} replica 2 ${POD_PODIP}:/glustervolumes/${S3_ACCOUNT} ${POD_HOSTIP}:/glustervolumes/${S3_ACCOUNT} force)
-        echo ${rslt}
-        echo "启动S3服务卷${S3_ACCOUNT}. gluster volume start ${S3_ACCOUNT}"
-        rslt=$(gluster volume start ${S3_ACCOUNT})
-        echo ${rslt}
-        rslt=$(echo "y"|gluster volume remove-brick ${S3_ACCOUNT} replica 1 ${POD_PODIP}:/glustervolumes/${S3_ACCOUNT} force)
-        echo ${rslt}
-    fi
 
     echo "inited" > /glustervolumes/shadowadmin__inited__
 fi
@@ -189,16 +140,12 @@ fi
 # 主进程不退出
 while true
 do
-    content=$(gluster pool list)
+    content=$(gluster peer status)
     echo "######peer status######"
     echo ${content}
-    content=$(gluster volume info)
-    echo "######volume info######"
+    content=$(gluster volume list)
+    echo "######volume list######"
     echo ${content}
-    if [[ ${S3_ENABLE} == "true" ]]; then
-        echo "######s3 info######"
-        echo -e "S3_ACCOUNT: ${S3_ACCOUNT}\nS3_USER: ${S3_USER}\nS3_PWD: ${S3_PWD}"
-    fi
     sleep 10
 done
 

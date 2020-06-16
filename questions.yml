@@ -30,10 +30,59 @@ questions:
   type: string
   required: true
 - variable: fs.volumes
-  group: "卷配置"
+  group: "集群配置"
   description: |-
     设置卷，多个以','分割。每一个名称就是复制卷卷名。
-    以sobeyvolume为例，容器内/glustervolumes/sobeyvolume；主机/glusterworkspace/glusterfs-0/volumes/sobeyvolume
+    以sobeyvolume为例，容器内/glustervolumes/sobeyvolume；主机/var/lib/kubelet/glusterworkspace/glusterfs-0/volumes/sobeyvolume
   type: string
   label: 以“,”分割，设置1个或多个卷
   required: true
+- variable: s3.enable
+  default: false
+  description: |-
+    是否开启S3服务。如果开启，将设置S3相关信息\nS3的集群内访问地址为http://glusterfs-s3[.namespace]:8080/xxxx\n
+    如果开启了nodeport，则集群外访问地址为http://host:nodeport/xxxxx
+  type: enum
+  group: "S3设置"
+  options:
+    - true
+    - false
+  required: true
+  label: 是否开启S3服务
+  show_subquestion_if: true
+  subquestions:
+  - variable: s3.account
+    default: "glusters3volume"
+    description: "S3卷设置"
+    type: string
+    label: "S3_ACCOUNT设置"
+  - variable: s3.user
+    default: "sobeyficus"
+    description: "S3_USER设置"
+    type: string
+    label: "S3_USER设置"
+  - variable: s3.password
+    default: "sobeyficus2020"
+    description: "S3_PASSWORD设置"
+    type: string
+    label: "S3_PASSWORD设置"
+  - variable: s3.capacity
+    default: 5
+    description: "S3存储卷的大小设置(Gi)"
+    type: int
+    label: "S3存储卷的大小设置"
+  - variable: s3.enablenodeport
+    description: "是否开启S3服务的nodeport，如果开启，需要填写nodeport"
+    type: enum
+    default: false
+    options:
+      - true
+      - false
+    label: "是否开启S3服务的nodeport"
+- variable: s3.nodeport
+  default: 30880
+  group: "S3设置"
+  description: "设置S3服务的nodeport"
+  type: int
+  label: "S3服务的nodeport"
+  show_if: "s3.enablenodeport=true"
